@@ -3,8 +3,8 @@ version: '3.8'
 services:
   chesspair-api:
     image: ${DOCKER_IMAGE:-dsyuskov/chesspair-api:latest}
-    expose:
-      - '3000'
+    ports:
+      - '3000:3000'
     environment:
       - NODE_ENV=production
       - PORT=3000
