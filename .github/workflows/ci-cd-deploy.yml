@@ -1,10 +1,9 @@
-name: CI/CD - Build, Test & Deploy
+name: Deploy to VDS
 
 on:
   push:
-    branches: [master, main, develop]
-  pull_request:
-    branches: [master, main, develop]
+    branches:
+      - master
 
 jobs:
   test:
@@ -35,18 +34,12 @@ jobs:
       - name: Build project
         run: npm run build
 
-  build-and-push:
-    needs: test
+  build-and-deploy:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-
-    permissions:
-      contents: read
-      packages: write
-
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-
+    env:
+      IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/chesspair-api
+      CONTAINER_NAME: chesspair-api
+      DEPLOY_PATH: /home/deploy/chesspair-api
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -54,90 +47,47 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ env.IMAGE_NAME }}:latest
 
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy to VDS
-        uses: appleboy/ssh-action@master
+      - name: Deploy to VDS via SSH
+        uses: appleboy/ssh-action@v1.0.3          
         with:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           key: ${{ secrets.VDS_SSH_KEY }}
           script: |
             set -e
-            echo "🚀 Starting deployment..."
             
-            cd ${{ secrets.VDS_APP_PATH }}
+            echo "Changing to deployment directory..."
+            cd ${{ env.DEPLOY_PATH }} || { echo "Failed to change directory"; exit 1; }
             
-            # Log in to GitHub Container Registry
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "Pulling latest Docker image..."
+            docker pull ${{ env.IMAGE_NAME }}:latest || { echo "Failed to pull Docker image"; exit 1; }
             
-            # Pull latest image
-            echo "📦 Pulling latest Docker image..."
-            docker pull ghcr.io/${{ github.repository }}:latest
+            echo "Checking disk space..."
+            df -h | grep -E '9[5-9]%|100%' && { echo "Disk space critical"; exit 1; } || true
             
-            # Stop and remove old container
-            echo "🛑 Stopping old container..."
-            docker compose down || true
+            echo "Stopping old containers..."
+            docker compose -f docker-compose.yml down || { echo "Failed to stop containers"; exit 1; }
             
-            # Create/update docker-compose.yml with latest image
-            cat > docker-compose.yml << 'EOF'
-            version: '3.8'
-            services:
-              chesspair-api:
-                image: ghcr.io/${{ github.repository }}:latest
-                ports:
-                  - '3000:3000'
-                environment:
-                  - NODE_ENV=production
-                  - PORT=3000
-                restart: unless-stopped
-                healthcheck:
-                  test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-                  interval: 30s
-                  timeout: 10s
-                  retries: 3
-                  start_period: 40s
-            EOF
+            echo "Starting new containers..."
+            docker compose -f docker-compose.yml up -d || { echo "Failed to start containers"; exit 1; }
             
-            # Start new container
-            echo "🚀 Starting new container..."
-            docker compose up -d
+            echo "Verifying deployment..."
+            sleep 5
+            docker compose -f docker-compose.yml ps | grep -E 'unhealthy|exited' && { echo "Container health check failed"; exit 1; } || true
             
-            echo "✅ Deployment completed successfully!"
-            
-            # Print status
-            docker compose ps
+            echo "Deployment successful!"
+

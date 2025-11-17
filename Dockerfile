@@ -1,12 +1,12 @@
 # Multi-stage Dockerfile for ChessPair API
 
 # Builder stage
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Copy package manifests and install all dependencies
-COPY package.json package-lock.json* ./
-RUN npm install
+# Установить зависимости
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile
 
 # Copy source and build
 COPY . .
@@ -21,6 +21,9 @@ ENV NODE_ENV=production
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
+
+# Установить curl для healthcheck
+RUN apk add --no-cache curl
 
 EXPOSE 3000
 
