@@ -17,3 +17,8 @@ services:
       start_period: 20s
     networks:
       - chesspair-net
+
+networks:
+  chesspair-net:
+    driver: bridge
+    external: true
