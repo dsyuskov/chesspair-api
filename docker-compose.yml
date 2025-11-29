@@ -3,8 +3,6 @@ version: '3.8'
 services:
   chesspair-api:
     image: ${DOCKER_IMAGE:-dsyuskov/chesspair-api:latest}
-    ports:
-      - '3000:3000'
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -21,4 +19,4 @@ services:
 networks:
   chesspair-net:
     driver: bridge
-    external: true
+    name: chesspair-net
